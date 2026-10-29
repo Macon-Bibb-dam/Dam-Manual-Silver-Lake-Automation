@@ -1,0 +1,112 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF</title>
+<style>
+  html, body { margin: 0; background: #525659; }
+  #pages { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 12px 0 80px; }
+  canvas { display: block; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+  #zoom { position: fixed; right: 16px; bottom: 16px; display: flex; gap: 6px;
+          background: rgba(32,33,36,.85); padding: 6px; border-radius: 8px; }
+  #zoom button { width: 44px; height: 44px; font: 22px sans-serif; color: #fff;
+                 background: #3c4043; border: 0; border-radius: 6px; cursor: pointer; }
+  #zoom button:active { background: #5f6368; }
+  #msg { color: #fff; font: 16px sans-serif; text-align: center; padding: 40px; }
+</style>
+</head>
+<body>
+<div id="pages"><div id="msg">Loading…</div></div>
+<div id="zoom">
+  <button id="out" title="Zoom out" aria-label="Zoom out">&minus;</button>
+  <button id="fit" title="Fit width" aria-label="Fit width">&#8596;</button>
+  <button id="in"  title="Zoom in"  aria-label="Zoom in">+</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+  // ---- Change this to your PDF's file name (same folder as this page) ----
+  const DEFAULT_FILE = "Dam_Operating_Manual_Ross_Systems.pdf";
+  // You can also pick a file in the link: index.html?file=other.pdf
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+  const file = new URLSearchParams(location.search).get("file") || DEFAULT_FILE;
+  const container = document.getElementById("pages");
+  let pdf = null, scale = 1, fitMode = true, token = 0;
+
+  function fitWidthScale(page) {
+    const w = page.getViewport({ scale: 1 }).width;
+    return Math.max(0.25, (document.documentElement.clientWidth - 24) / w);
+  }
+
+  async function render() {
+    const my = ++token;
+    const dpr = window.devicePixelRatio || 1;
+    const docH = document.documentElement.scrollHeight || 1;
+    const scrollRatio = window.scrollY / docH;
+
+    const first = await pdf.getPage(1);
+    if (fitMode) scale = fitWidthScale(first);
+
+    // Size every page first so the scroll position can be restored right away
+    const items = [];
+    const frag = document.createDocumentFragment();
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = i === 1 ? first : await pdf.getPage(i);
+      if (my !== token) return;
+      const vp = page.getViewport({ scale });
+      const c = document.createElement("canvas");
+      c.width = Math.floor(vp.width * dpr);
+      c.height = Math.floor(vp.height * dpr);
+      c.style.width = Math.floor(vp.width) + "px";
+      c.style.height = Math.floor(vp.height) + "px";
+      frag.appendChild(c);
+      items.push({ page, vp, c });
+    }
+    container.replaceChildren(frag);
+    window.scrollTo(0, scrollRatio * document.documentElement.scrollHeight);
+
+    for (const { page, vp, c } of items) {
+      if (my !== token) return;
+      await page.render({
+        canvasContext: c.getContext("2d"),
+        viewport: vp,
+        transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null
+      }).promise;
+    }
+  }
+
+  function zoomBy(f) {
+    fitMode = false;
+    scale = Math.min(5, Math.max(0.25, scale * f));
+    render();
+  }
+
+  document.getElementById("in").onclick  = () => zoomBy(1.2);
+  document.getElementById("out").onclick = () => zoomBy(1 / 1.2);
+  document.getElementById("fit").onclick = () => { fitMode = true; render(); };
+
+  window.addEventListener("wheel", e => {
+    if (e.ctrlKey) { e.preventDefault(); zoomBy(e.deltaY < 0 ? 1.1 : 1 / 1.1); }
+  }, { passive: false });
+
+  let resizeTimer;
+  window.addEventListener("resize", () => {
+    if (!fitMode || !pdf) return;
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(render, 200);
+  });
+
+  pdfjsLib.getDocument(file).promise
+    .then(doc => { pdf = doc; return render(); })
+    .catch(err => {
+      container.innerHTML = '<div id="msg">Could not load "' +
+        file.replace(/[<>&"]/g, "") + '".</div>';
+      console.error(err);
+    });
+</script>
+</body>
+</html>
